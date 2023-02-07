@@ -7,10 +7,9 @@ const mongoose = require('mongoose');
 mongoose.set('strictQuery', false);
 // The mongoose-enryption encrypts when we use ModelInstance.save() and decrypts upon Model.find()
 const encrypt = require('mongoose-encryption');
+const md5 = require('md5'); // Level 3 Encryption: Hashing our password
 // dotenv will make keys defined in the root .env file available using process.env
 require('dotenv').config() // Level 2 Encryption (B): Using ENV variables for encryption keys/secrets
-
-
 
 /* Setting up the app */
 const app = express();
@@ -19,7 +18,6 @@ app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({
     extended: true
 }));
-
 
 mongoose.connect('mongodb://localhost:27017/secretsDB');
 
@@ -33,7 +31,6 @@ userSchema = new mongoose.Schema({
 const secret = process.env.SECRET_KEY;
 /* Typing the secret into the app.js is not a good idea.
 Our app.js is easily accesable and the hacker can use the same mongoose-encryption module to decrypt with our known secret. */
-userSchema.plugin(encrypt, {secret: secret, encryptedFields: ['password']}); 
 User = mongoose.model("User", userSchema);
 secretSchema = new mongoose.Schema({
     secret: {type:String, required:[true, "A secret is no secret without the secret..."]}
@@ -76,7 +73,7 @@ app.get("/logout", function(req, res){
 
 app.post("/register", function(req, res){
     // Level 1 Encryption: User-password registration
-    const newUser = User({email: req.body.username, password: req.body.password})
+    const newUser = User({email: req.body.username, password: md5(req.body.password)})
     newUser.save(function(err){
         if (err){
             res.send(err);
@@ -93,7 +90,7 @@ app.post("/login", function(req, res){
             res.send(err);
         }
         // Password check
-        else if (foundUser.password === req.body.password) {
+        else if (foundUser.password === md5(req.body.password)) {
             res.redirect("/secrets");
         }
         else {
