@@ -110,13 +110,13 @@ app.post("/login", function(req, res){
                     res.redirect("/secrets");
                 }
                 else {
-                    console.log("Wrong password for user: " + foundUser.username);
+                    console.log("Wrong password for user: " + foundUser.email);
                     res.redirect("/login");
                 }
             });
         }
         else {
-            console.log("No user with given email.");
+            console.log("No user with given email: " + foundUser.email);
             res.redirect("/login");
         }
     });
