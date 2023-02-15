@@ -5,15 +5,13 @@ const ejs = require("ejs");
 const express = require('express');
 const mongoose = require('mongoose');
 mongoose.set('strictQuery', false);
-/* const encrypt = require('mongoose-encryption');
-const md5 = require('md5'); // Level 3 Encryption: Hashing our password */
-const bcrypt = require('bcrypt'); // Level 4 Encryption: Hashing & Salting our password
-const saltRounds = 10;
+const session = require('express-session'); // Create a session middleware with the given options. Session data is not saved in the cookie itself, just the session ID. Session data is stored server-side.
+const passport = require('passport'); // Passport is Express-compatible authentication middleware for Node.js. Passport's sole purpose is to authenticate requests, which it does through an extensible set of plugins known as strategies.
+const passportLocalMongoose = require('passport-local-mongoose'); // Passport-Local Mongoose is a Mongoose plugin that simplifies building username and password login with Passport.
+require('dotenv').config() // Level 2 Encryption (B): Using ENV variables for encryption keys/secrets 
+const secret = process.env.SECRET_KEY;
 
-// dotenv will make keys defined in the root .env file available using process.env
-require('dotenv').config() // Level 2 Encryption (B): Using ENV variables for encryption keys/secrets
-
-/* Setting up the app */
+/**  Setting up the app **/
 const app = express();
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
@@ -21,23 +19,43 @@ app.use(bodyParser.urlencoded({
     extended: true
 }));
 
+/* Level 5 Authentication - Cookies: Authentication with Passport package */
+// Setting up/Configuring the session
+app.use(session({
+  secret: secret,   // A long string, that we will save in our .env file. This is the secret used to sign the session ID cookie. This can be either a string for a single secret, or an array of multiple secrets. 
+  resave: false,            // Forces the session to be saved back to the session store, even if the session was never modified during the request.
+  saveUninitialized: true,  // Forces a session that is "uninitialized" to be saved to the store. A session is uninitialized when it is new but not modified. 
+  cookie: { secure: false }  // Settings object for the session ID cookie. The default value is { path: '/', httpOnly: true, secure: false, maxAge: null }.
+}));
+// Initalizating the passport package to use it for Authentication */
+app.use(passport.initialize());
+// Making passport deal with our login sessions */
+app.use(passport.session());
+
 mongoose.connect('mongodb://localhost:27017/secretsDB');
 
 /* Schemas & Models */
-userSchema = new mongoose.Schema({
-    email: {type:String, required:[true, "Email is required"]},
-    password: {type:String, required:[true, "Password is required"]}
-});
-// Level 2 Encryption (A) - Adding the encryption to the Schema -> psw will be encrypted in Database
-/* const secret = "Thisisourlittlesecret"; */
-const secret = process.env.SECRET_KEY;
-/* Typing the secret into the app.js is not a good idea.
-Our app.js is easily accesable and the hacker can use the same mongoose-encryption module to decrypt with our known secret. */
-User = mongoose.model("User", userSchema);
-secretSchema = new mongoose.Schema({
+const secretSchema = new mongoose.Schema({
     secret: {type:String, required:[true, "A secret is no secret without the secret..."]}
 });
-Secret = new mongoose.model("Secret", secretSchema);
+const Secret = new mongoose.model("Secret", secretSchema);
+// Creating the Schema
+const userSchema = new mongoose.Schema({
+    username: {type:String},
+    password: {type:String}
+});
+// Adding the passport-local-mongoose package as plugin to our Schema, in order to make it hash&salt our passwords
+userSchema.plugin(passportLocalMongoose);
+// Initalizing the Model from the Schema
+const User = new mongoose.model("User", userSchema);
+
+/* Passport local configurations */
+// Creating the authentication strategy based on the 'User' Model (username, password)
+passport.use(User.createStrategy());
+// use static serialize and deserialize of Model for passport Session support
+passport.serializeUser(User.serializeUser());       // cookie is created and saved (stuffed) with the authentication data (User.username, User.password)
+passport.deserializeUser(User.deserializeUser());   // cookie is read (crumbled), message inside is discovered for authentication
+
 
 /* URL Routes */
 app.get("/", function(req, res){
@@ -57,71 +75,65 @@ app.get("/submit", function(req, res){
 });
 
 app.get("/secrets", function(req, res){
-    Secret.find({}, function(err, foundSecrets){
-        if (err){
-            res.send("Error during searching for secrets");
-        }
-        else {
-            console.log(foundSecrets);
-            const Secrets = foundSecrets;
-            res.render("secrets", {Secrets:Secrets});
-        }
-    });
+    if (req.isAuthenticated()){ // checking if the user is authenticated by passport.authenticate (relying here on session, passport, passport-local, passport-local-mongoose)
+        Secret.find({}, function(err, foundSecrets){
+            if (err){
+                res.send(err);
+            }
+            else {
+                res.render("secrets", {"Secrets":foundSecrets});;
+            }
+        });
+    }
+    else {
+        res.redirect("/login");
+    }
 });
 
 app.get("/logout", function(req, res){
-    res.redirect("/login");
+    req.logout(function(err){
+        if (err){
+            res.send(err);
+        }
+        else {
+            res.redirect("/");
+        }
+    });
 })
 
 app.post("/register", function(req, res){
     // Level 1 Encryption: User-password registration
-    bcrypt.hash(req.body.password, saltRounds, function(err, hash){
-        if (err){
-            res.send(err);
+    
+    // the register method comes from the passport-local-mongoose package and is syntactic sugar for new User creation and save
+    User.register({username: req.body.username}, req.body.password, function(err, user) {
+        if (err) { 
+            console.log(err);
+            res.redirect("/register");
         }
         else {
-            const newUser = User({email: req.body.username, password: hash})
-            newUser.save(function(err){
-                if (err){
-                    res.send(err);
-                }
-                else {
-                    res.redirect('/secrets');
-                }
+             // authenticate user --> user will be able to directly go to 'secrets' while they are logged in
+            passport.authenticate('local')(req, res, function () {
+                res.redirect('/secrets');
             });
         }
     })
-
-    
 });
 
 app.post("/login", function(req, res){
-    User.findOne({email: req.body.username},function(err, foundUser){
-        if (err){
-            res.send(err);
-        }
-        // Password check
-        else if (foundUser) {
-            bcrypt.compare(req.body.password, foundUser.password, function(err,result){
-                if (err) {
-                    res.send(err);
-                }
-                else if (result === true){
+        const user = new User({username: req.body.username, password: req.body.password});
+        req.login(user, function(err){
+            if (err) {
+                res.send(err);
+            }
+            else {
+                // authenticate user --> user will be able to directly go to 'secrets' while they are logged in
+                passport.authenticate('local')(req, res, function () {
                     res.redirect("/secrets");
-                }
-                else {
-                    console.log("Wrong password for user: " + foundUser.email);
-                    res.redirect("/login");
-                }
-            });
-        }
-        else {
-            console.log("No user with given email: " + foundUser.email);
-            res.redirect("/login");
-        }
-    });
-      
-});
+                });
+            }
+        })
+    }
+);
 
 app.post("/submit", function(req, res){
     const secret = new Secret({secret: req.body.secret});
