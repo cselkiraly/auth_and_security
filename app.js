@@ -5,9 +5,11 @@ const ejs = require("ejs");
 const express = require('express');
 const mongoose = require('mongoose');
 mongoose.set('strictQuery', false);
-// The mongoose-enryption encrypts when we use ModelInstance.save() and decrypts upon Model.find()
-const encrypt = require('mongoose-encryption');
-const md5 = require('md5'); // Level 3 Encryption: Hashing our password
+/* const encrypt = require('mongoose-encryption');
+const md5 = require('md5'); // Level 3 Encryption: Hashing our password */
+const bcrypt = require('bcrypt'); // Level 4 Encryption: Hashing & Salting our password
+const saltRounds = 10;
+
 // dotenv will make keys defined in the root .env file available using process.env
 require('dotenv').config() // Level 2 Encryption (B): Using ENV variables for encryption keys/secrets
 
@@ -73,15 +75,24 @@ app.get("/logout", function(req, res){
 
 app.post("/register", function(req, res){
     // Level 1 Encryption: User-password registration
-    const newUser = User({email: req.body.username, password: md5(req.body.password)})
-    newUser.save(function(err){
+    bcrypt.hash(req.body.password, saltRounds, function(err, hash){
         if (err){
             res.send(err);
         }
         else {
-            res.redirect('/secrets');
+            const newUser = User({email: req.body.username, password: hash})
+            newUser.save(function(err){
+                if (err){
+                    res.send(err);
+                }
+                else {
+                    res.redirect('/secrets');
+                }
+            });
         }
-    });
+    })
+
+    
 });
 
 app.post("/login", function(req, res){
@@ -90,11 +101,22 @@ app.post("/login", function(req, res){
             res.send(err);
         }
         // Password check
-        else if (foundUser.password === md5(req.body.password)) {
-            res.redirect("/secrets");
+        else if (foundUser) {
+            bcrypt.compare(req.body.password, foundUser.password, function(err,result){
+                if (err) {
+                    res.send(err);
+                }
+                else if (result === true){
+                    res.redirect("/secrets");
+                }
+                else {
+                    console.log("Wrong password for user: " + foundUser.username);
+                    res.redirect("/login");
+                }
+            });
         }
         else {
-            console.log("No user with given email-password combination.")
+            console.log("No user with given email.");
             res.redirect("/login");
         }
     });
